@@ -43,6 +43,13 @@ def prepare_json(text: str) -> str:
     templ = re.compile(r'#([\w]+)')
     text = templ.sub(r'"\1"', text)
 
+    # rule7 function()) -> 'function<text>)' (if no spaces)
+    templ = re.compile(r'(\w*)\(( *)\)\)')
+    text = templ.sub(r'"\1<\2>")', text)
+
+    # rule 8 ": " -> ", "
+    text = re.sub("[^ ]: ", ", ", text)
+
     # remove ProjectPreview part
     i = text.index(r'"ProjectPreview":{')
     text = text[:i]
@@ -57,23 +64,27 @@ def data_correct(text: str) -> str:
     :return:
     """
 
-    # rule7: special rule for strings like Name='max(dB(S(1,1)))'
+    # rule9: special rule for strings like Name='max(dB(S(1,1)))'
     templ = re.compile(r'\(?(d?B?)\(?[SZ]\(1[,;]1\)\)?\)?')
     text = templ.sub(r'<\1<S<1.1>>>', text)
 
-    # rule8: special rule for db(S(1, 1))
+    # rule10: special rule for db(S(1, 1))
     templ = re.compile(r'dB\(([^\)]*)\)')
     text = templ.sub(r'db<\1>', text)
 
-    # rule9: fix SimVAlueID parameter
+    # rule11: special rule for theta-rho-phi(0)
+    if "theta-rho-phi(0)" in text:
+        text = text.replace("(0)", "<0>")
+
+    # rule12: fix SimVAlueID parameter
     if "SimValueID" in text:
         text = text.replace("SimValueID=", "\"SimValueID\", ")
 
-    # rule10 escape characters for quotes in strings with SweptVAlue parameter
-    if "SweptValues" in text:
-        text = text.replace(r'"', r'\"')
+    # rule13 escape characters for quotes in strings with SweptVAlue parameter
+    #if "SweptValues" in text:
+    #    text = text.replace(r'"', r'\"')
 
-    # rule11 handle special words $begin_data and $end_data
+    # rule14 handle special words $begin_data and $end_data
     templ = re.compile(r"\$begin_cdata\$(.)*?\$end_cdata\$")
     text = templ.sub(r'"start_data \1end_data"', text)
 
@@ -96,21 +107,24 @@ def special_rules(text: str) -> str:
         text = text.replace(r'R3DWindowPos(Editor3d())', r'"R3DWindowPos":"Editor3d()",')
         return text
 
+    if 'Circuit(Editor3d(View(WindowPos' in text:
+        text = "\n"
+        return text
+
     if "cam(XYCam" in text or "cam(PolCam" in text:
-        text = "\""+text[:4]+"\":\""+text[4:]+"\","
+        text = "\"" + text[:4] + "\":\"" + text[4:] + "\","
         return text
 
     if "R3DWindowPos(" in text:
         text = text.replace(r'"', r'\"')
-        text = "\""+text[:12]+"\":\""+text[12:]+"\","
+        text = "\"" + text[:12] + "\":\"" + text[12:] + "\","
         return text
 
-    if "WindowPos(" in text:
+    if "WindowPos(" in text and text.index("WindowPos") == 0:
         text = "\"" + text[:9] + "\":\"" + text[9:] + "\","
         return text
 
     return ""
-
 
 def string_handler(text: str) -> str:
     """
@@ -118,24 +132,23 @@ def string_handler(text: str) -> str:
     :param text: string
     :return: corrected string
     """
-
     temp = special_rules(text)
     if temp:
         return temp
 
     text = data_correct(text)
 
-    # rule12: comma in the middle of text (without space) becomes ;
+    # rule15: comma in the middle of text (without space) becomes ;
     templ = re.compile(r',([^ ])')
     text = templ.sub(r';\1', text)
 
-    #rule14: attribute=value(data) -> 'attribute':'value(data)'
+    # rule16: attribute=value(data) -> 'attribute':'value(data)'
     templ = re.compile(r'"?(\w+)"?="?(\w+)\((\w+)\)"?')
     temp = templ.sub(r'"\1":"\2(\3)",', text)
     if temp != text:
         return temp
 
-    # rule13: (id=value, id1 = value1) -> ("id"->"value", "id1"->"value1")
+    # rule17: (id=value, id1 = value1) -> ("id"->"value", "id1"->"value1")
     templ = re.compile(r'([\w ]+)\(([^\)]*)\)')
     res = templ.findall(text)
     for r in res:
@@ -143,44 +156,48 @@ def string_handler(text: str) -> str:
         for data in r:
             text = templ2.sub(r'"\1":"\2"', text)
 
-    # rule14 blabala attribute(text)  -> blabbla {"attribute":{"text"}}
+    # rule18 blabala attribute(text)  -> blabbla {"attribute":{"text"}}
     #      attribute(text)  -> "attribute":{"text"}
     templ = re.compile(r'"?([\w]+)"?\(([\w "-]+):([^\)]+)\)')
     res = templ.search(text)
-    if res != None:
+    if res is not None:
         if res.start() == 0:
             text = templ.sub(r'"\1":{\2:\3},', text)
         else:
             text = templ.sub(r'{"\1":{\2:\3}}', text)
 
-    # rule 15: Attribute="value" -> "Attribute":"value",
+    # rule 19: Attribute="value" -> "Attribute":"value",
     #          Attribute=value -> "Attribute":value,
     #          "Attribute"=value -> "Attribute":value,
     #          Attribute = value, -> "Attribute":value
-    templ = re.compile(r'"?([\w ]*)"? ?= ?("?[^,]*"?),? ?')
+    templ = re.compile(r'"?([\w +-]*)"? ?= ?("?[^,]*"?),? ?')
     text = templ.sub(r'"\1":\2,', text)
 
-    # rule 16: Attribute[value] -> "Attribute":"[value]"
-    templ = re.compile(r'"?([\w ]+)"?(\[[^\]]*\])')
+    # rule 20: Attribute[value] -> "Attribute":"[value]" (without " in [])
+    templ = re.compile(r'"?([\w ]+)"?(\[[^\]\"]*\])')
     text = templ.sub(r'"\1":"\2",', text)
 
-    # rule 17: Attribute(values) -> "Attribute":[values],
+    # rule 21: Attribute[...] -> "Attribute":[...],
+    templ = re.compile(r'"?([\w ]+)"?\[([^\]]*)\]')
+    text = templ.sub(r'"\1":[\2],', text)
+
+    # rule 22: Attribute(values) -> "Attribute":[values],
     #        "Attribute"(values) -> "Attribute":[values],
     templ = re.compile(r'"?([\w ]+)"?\((.*)\)')
     text = templ.sub(r'"\1":[\2],', text)
 
-    # rule18: remove extra commas
+    # rule23: remove extra commas
     text = re.sub(",,", ",", text)
 
     return text
 
 
 def create_first_json(filename: str):
-    f = open(filename + '.hfss')
+    f = open(filename)
     text = f.read()
     f.close()
     text = prepare_json(text)
-    g = open(filename + '.json', "w")
+    g = open(filename.split('.')[0] + '.json', "w")
     g.write('{')
     text = text.split('\n')
     for s in text:
@@ -262,33 +279,55 @@ def get_coordinates(filename: str):
     res = create_coord_dict(data2, res)
     return res
 
-
-def write_to_file(filename: str, res: dict):
+def get_indexes(coords: list) -> (int, int):
     """
-    function creates kicad_mod file
+    get indexes of coords elements
+    :param coords: list with coords for example
+    [[3, 15.12, 14.56, 0], [3, 13.32, 14.56, 0], [3, 13.32, 15.56, 0], [3, 15.12, 15.56, 0]]
+    :return: indexes of coord elements (1, 2) here
+    """
+    indexes = []
+    arr  = [len(set(x)) for x in [[coords[i][j] for i in range (0, 4)] for j in range (0, 4)]]
+    for i in range(0,4):
+        if arr[i] > 1:
+            indexes.append(i)
+    return indexes
+
+
+def write_to_files(filename: str, res: dict):
+    """
+    function creates kicad_mod files (direct and inverted)
     :param filename: name of file
     :param res: dict with coordinates
     :return:
     """
-    f = open(filename + ".kicad_mod", "w")
-    f.write("(module %s\n" % filename)
+    f1 = open(filename + ".kicad_mod", "w")
+    f1.write("(module %s\n" % filename)
+    f2 = open(filename + "_inverted.kicad_mod", "w")
+    f2.write("(module %s\n" % filename)
+    [i, j] = get_indexes(res[list(res.keys())[0]])
     for rect in res.keys():
         points = res[rect]
-        s = "  (fp_poly (pts "
+        s1 = "  (fp_poly (pts "
+        s2 = "  (fp_poly (pts "
         for point in points:
-            s += ("(xy %.6f %.6f) " % (point[0], point[1]))
-        f.write(s[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
-    f.write(")")
-    f.close()
+            s1 += ("(xy %.6f %.6f) " % (point[i], point[j]))
+            s2 += ("(xy %.6f %.6f) " % (0-point[i], point[j]))
+        f1.write(s1[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
+        f2.write(s2[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
+    f1.write(")")
+    f1.close()
+    f2.write(")")
+    f2.close()
 
 
 def main(filename):
     try:
         create_first_json(filename)
     except FileNotFoundError:
-        print("File %s not found, please use filename without extension" % (filename + '.hfss'))
+        print("File %s not found" % (filename))
         return
-
+    filename = filename.split('.')[0]
     create_second_json(filename)
 
     try:
@@ -297,14 +336,14 @@ def main(filename):
         print("Json failed")
         return
 
-    remove(filename + '.json')
+    # remove(filename + '.json')
 
     new_keys = sorted(res.keys())
     new_res = {}
     for key in new_keys:
         new_res[key] = res[key]
-    write_to_file(filename, new_res)
-    print(filename+".kicad_mod created")
+    write_to_files(filename, new_res)
+    print("%s.kicad_mod created, %s_inverted.kicad_mod created" % (filename, filename))
 
 
 if __name__ == '__main__':
