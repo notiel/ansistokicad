@@ -88,6 +88,11 @@ def data_correct(text: str) -> str:
     templ = re.compile(r"\$begin_cdata\$(.)*?\$end_cdata\$")
     text = templ.sub(r'"start_data \1end_data"', text)
 
+    if 'Height' in text and 'if' in text:
+        text = text.replace('(', '<')
+        text = text.replace(')', '>')
+        text = text.replace(',', ';')
+
     return text
 
 
@@ -132,6 +137,9 @@ def string_handler(text: str) -> str:
     :param text: string
     :return: corrected string
     """
+
+    if 'Height' in text:
+        print(text)
     temp = special_rules(text)
     if temp:
         return temp
@@ -147,6 +155,7 @@ def string_handler(text: str) -> str:
     temp = templ.sub(r'"\1":"\2(\3)",', text)
     if temp != text:
         return temp
+
 
     # rule17: (id=value, id1 = value1) -> ("id"->"value", "id1"->"value1")
     templ = re.compile(r'([\w ]+)\(([^\)]*)\)')
