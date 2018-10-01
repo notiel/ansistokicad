@@ -1,0 +1,7 @@
+.*
+__*
+!/.gitignore
+*.hfss
+data/
+*.json
+*.kicad_mod
