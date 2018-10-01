@@ -317,13 +317,14 @@ def write_to_files(filename: str, res: dict):
     [i, j] = get_indexes(res[list(res.keys())[0]])
     for rect in res.keys():
         points = res[rect]
-        s1 = "  (fp_poly (pts "
-        s2 = "  (fp_poly (pts "
-        for point in points:
-            s1 += ("(xy %.6f %.6f) " % (point[i], point[j]))
-            s2 += ("(xy %.6f %.6f) " % (0-point[i], point[j]))
-        f1.write(s1[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
-        f2.write(s2[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
+        if len(points) < 2 and abs(points[1][0] - points[0][0]) < 30:
+            s1 = "  (fp_poly (pts "
+            s2 = "  (fp_poly (pts "
+            for point in points:
+                s1 += ("(xy %.6f %.6f) " % (point[i], point[j]))
+                s2 += ("(xy %.6f %.6f) " % (0-point[i], point[j]))
+            f1.write(s1[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
+            f2.write(s2[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
     f1.write(")")
     f1.close()
     f2.write(")")
