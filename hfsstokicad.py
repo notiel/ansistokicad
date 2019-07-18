@@ -2,16 +2,36 @@ import re
 import json
 import sys
 from os import remove
+from  dataclasses import dataclass
+from typing import List, Any, Dict, Tuple
+import math
+
 
 # doubled hssf elements (should be replaced with Element0..EleemntN to validate json file)
-doubled = {"MoveBackwards", "VariableProp", "AnsoftRangedIDServer", "Operation", "TolVt", "GeometryPart", 'Edge',
-           "DependencyObject",
-           "DependencyInformation", "GeometryPosition", "Range", "Sweep", "Solution", "SimValue", "Soln",
-           "TraceComponentDefinition",
-           "TraceDef", "MainMapItem", "SubMapItem", "ListItem", "IDMapItem", "Graph2D"}
+doubled = {"MoveBackwards", "VariableProp", "AnsoftRangedIDServer", "Operation", "TolVt", "GeometryPart",
+           "PLSegment",'Edge', "DependencyObject", "PLPoint", "DependencyInformation", "GeometryPosition", "Range",
+           "Sweep", "Solution", "SimValue", "Soln", "TraceComponentDefinition", "TraceDef", "MainMapItem", "SubMapItem",
+           "ListItem", "IDMapItem", "Graph2D"}
 
 # PCB elements excluded for result
 exclude_names = {"Port", "Top", "Bottom"}
+
+deg_delta = 0.1
+
+@dataclass
+class Point:
+    x: float
+    y: float
+
+@dataclass
+class Arc:
+    number_of_point: int
+    startindex: int
+    type: str
+    angle: float = 0
+    center_x: float = 0
+    center_y: float = 0
+    numberofsegments: int = 0
 
 
 def prepare_json(text: str) -> str:
@@ -51,8 +71,8 @@ def prepare_json(text: str) -> str:
     text = re.sub("[^ ]: ", ", ", text)
 
     # remove ProjectPreview part
-    i = text.index(r'"ProjectPreview":{')
-    text = text[:i]
+    #i = text.index(r'"AllReferencedFilesForProject":{')
+    #text = text[:i]
 
     return text
 
@@ -131,6 +151,7 @@ def special_rules(text: str) -> str:
 
     return ""
 
+
 def string_handler(text: str) -> str:
     """
     functions applies regexp rules to string to make it part of valid json
@@ -138,8 +159,6 @@ def string_handler(text: str) -> str:
     :return: corrected string
     """
 
-    if 'Height' in text:
-        print(text)
     temp = special_rules(text)
     if temp:
         return temp
@@ -202,11 +221,11 @@ def string_handler(text: str) -> str:
 
 
 def create_first_json(filename: str):
-    f = open(filename)
+    f = open(filename, encoding='utf-8', errors='ignore')
     text = f.read()
     f.close()
     text = prepare_json(text)
-    g = open(filename.split('.')[0] + '.json', "w")
+    g = open(filename.split('.')[0] + '.json', "w", encoding='utf-8', errors='ignore')
     g.write('{')
     text = text.split('\n')
     for s in text:
@@ -240,16 +259,31 @@ def create_second_json(filename: str):
     :param filename: name of json file
     :return:
     """
-    g = open(filename + '.json')
+    g = open(filename + '.json', encoding='utf-8', errors = 'ignore')
     text = g.read()
     text = replace_with_count(text)
     text = re.sub(',\n*}', '}', text)
     g.close()
-    g = open(filename + '.json', "w")
+    g = open(filename + '.json', "w", encoding='utf-8')
     g.write(text)
 
 
-def create_coord_dict(data: dict, res: dict) -> dict:
+def get_variables(data: Dict[str, Any]):
+    """
+    gets variables list for data given
+    :param data: data
+    :return: dict with variables
+    """
+    res: Dict [str, Any] = dict()
+    for key in data:
+        res[data[key][0]] = data[key][3].replace("mm", "")
+        try:
+            res[data[key][0]] = float(res[data[key][0]])
+        except ValueError:
+            pass
+    return res
+
+def create_coord_dict(data: Dict[str, Any], res: Dict[int, List[str]]) -> Dict[int, List[str]]:
     """
     function gets list of rectangle coordinates from dict sctucture with data
     :param data: dict with file data
@@ -271,6 +305,73 @@ def create_coord_dict(data: dict, res: dict) -> dict:
                     res[int(key[12:])] = point_array
     return res
 
+def add_parameters_value(parameters: Dict[str, Any], points: List[Point]):
+    """
+    custom function for parametrical parameters, change it for every antenna
+    :param parameters: list of variables
+    :param points: list of points
+    :return:
+    """
+    angle_rad = float(parameters['Angle'].replace("deg", ""))/180*math.pi
+    points[0].x = float(parameters['X02'][:4]) + parameters['W2']
+    points[0].y = parameters['Y02'] - 0.2
+    points[8].x = parameters['Y20'] - (parameters['Y22'] * math.cos(angle_rad) - parameters['X22'] * math.sin(angle_rad))
+    points[8].y = parameters['X20'] - parameters['X22'] * math.cos(angle_rad) - parameters['Y22'] * math.sin(angle_rad)
+    points[15].x = float(parameters['X02'][:4]) + parameters['W2']
+    points[15].y = parameters['Y02'] - 0.2
+
+
+def get_arc_data(data: Dict[str, Any], parameters: Dict[str, Any]) -> Tuple[List[Arc], List[Point]]:
+    """
+    create list with angle data
+    :param parameters: list of variables
+    :param data: dict with data
+    :return:list of arc data
+    """
+    res_arcs: List[Arc] = list()
+    res_points: List[Point] = list()
+    try:
+        for geometry_part in data.keys():
+            operations = data[geometry_part]['Operations']
+            for key in operations:
+                if operations[key]['OperationType'] == 'Polyline':
+                    arcs = operations[key]['PolylineParameters']['PolylineSegments']
+                    for segment in arcs.keys():
+                        if arcs[segment]['SegmentType'] == 'AngularArc':
+                            try:
+                                res_arcs.append(Arc(startindex=arcs[segment]['StartIndex'],
+                                               number_of_point=arcs[segment]['NoOfPoints'],
+                                               numberofsegments=int(arcs[segment]['NoOfSegments']),
+                                               angle=float(arcs[segment]['ArcAngle'].replace("deg", "")),
+                                               center_x=float(arcs[segment]['ArcCenterX'].replace('mm', "")),
+                                               center_y=float(arcs[segment]['ArcCenterY'].replace('mm', "")),
+                                               type="arc"))
+                            except ValueError:
+                                angle = -float(parameters['Angle'].replace("deg", "")) if "-" in arcs[segment]['ArcAngle'] \
+                                    else float(parameters['Angle'].replace("deg", ""))
+                                res_arcs.append(Arc(startindex=arcs[segment]['StartIndex'],
+                                                    number_of_point=arcs[segment]['NoOfPoints'],
+                                                    numberofsegments=int(arcs[segment]['NoOfSegments']),
+                                                    angle=angle,
+                                                    center_x=float(arcs[segment]['ArcCenterX'].replace('mm', "")),
+                                                    center_y=float(arcs[segment]['ArcCenterY'].replace('mm', "")),
+                                                    type="arc"))
+                        if arcs[segment]['SegmentType'] == 'Line':
+                            res_arcs.append(Arc(type="line",
+                                           startindex=arcs[segment]['StartIndex'],
+                                           number_of_point=arcs[segment]['NoOfPoints']))
+                    points = operations[key]['PolylineParameters']['PolylinePoints']
+                    for point in points.keys():
+                        try:
+                            res_points.append(Point(x=float(points[point]['X'].replace("mm", "")),
+                                                    y=float(points[point]['Y'].replace("mm", ""))))
+                        except ValueError:
+                            res_points.append(Point(x=0, y=0))
+        add_parameters_value(parameters, res_points)
+    except KeyError:
+        pass
+    return res_arcs, res_points
+
 
 def get_coordinates(filename: str):
     """
@@ -278,15 +379,18 @@ def get_coordinates(filename: str):
     :param filename: name of json file
     :return:
     """
-    g = open(filename + '.json')
+    g = open(filename + '.json', encoding='utf-8', errors='ignore')
     data = json.loads(g.read())
     g.close()
-    data1 = data['AnsoftProject']['HFSSModel']['ModelSetup']['GeometryCore']['GeometryOperations']['ToplevelParts']
-    data2 = data['AnsoftProject']['HFSSModel']['ModelSetup']['GeometryCore']['GeometryOperations']['OperandParts']
-    res = dict({})
-    res = create_coord_dict(data1, res)
-    res = create_coord_dict(data2, res)
-    return res
+    geometry_data = data['AnsoftProject']['HFSSModel']['ModelSetup']['GeometryCore']['GeometryOperations']
+    res = dict()
+    res = create_coord_dict(geometry_data['ToplevelParts'], res)
+    res = create_coord_dict(geometry_data['OperandParts'], res)
+    variables = get_variables(data['AnsoftProject']['HFSSModel']['ModelSetup']['Properties'])
+    res_arcs, res_points = get_arc_data(geometry_data['ToplevelParts'], variables)
+    return res, res_arcs, res_points
+
+
 
 def get_indexes(coords: list) -> (int, int):
     """
@@ -303,9 +407,67 @@ def get_indexes(coords: list) -> (int, int):
     return indexes
 
 
-def write_to_files(filename: str, res: dict):
+def get_points_for_arc(arcs: List[Arc], res_points: List[Point], delta: float) -> List[Point]:
+    """
+    gets points for polilyne instead of arcs
+    :param res_points: start points for arcs data
+    :param delta: accuracy in degrees
+    :param arcs: arcs with data
+    :return: list of points with selected delta in degrees
+    """
+    poly_points: List[Point] = []
+    for arc in arcs:
+        if arc.type == "arc":
+            start_point = res_points[arc.startindex]
+            x: float = start_point.x
+            y: float = start_point.y
+            ang: float = arc.angle
+            x_c: float = arc.center_x
+            y_c: float= arc.center_y
+            r: float = math.sqrt((x-x_c)*(x-x_c) + (y-y_c)*(y-y_c))
+            start_angle: float = math.atan2(y-y_c, x-x_c)/math.pi*180
+            stop_angle: float = start_angle + ang
+            if ang > 0:
+                da: float = delta
+                cond = lambda a: a < stop_angle
+            else:
+                da = -delta
+                cond = lambda a: a > stop_angle
+            a = start_angle
+            while cond(a):
+                x = x_c + r * math.cos(a/180*math.pi)
+                y = y_c+ r * math.sin(a/180*math.pi)
+                poly_points.append(Point(x=x, y=y))
+                a += da
+        if arc.type == "line":
+            start_point = res_points[arc.startindex]
+            end_point = res_points[arc.startindex + 1]
+            poly_points.append(Point(x=start_point.x, y=start_point.y))
+            poly_points.append(Point(x=end_point.x, y=end_point.y))
+    return  poly_points
+
+
+def get_kicad_line_for_polyline(poly_points: List[Point]) -> Tuple[str, str]:
+    """
+    gets list of points and returnes str with KiCad poly
+    :param poly_points: points with lie data
+    :return: string for KiCadPoly with this data
+    """
+    line1_res = '(fp_poly (pts '
+    line2_res = '(fp_poly (pts '
+    for p in poly_points:
+        line1_res += '( xy %f %f)\n' % (p.x, p.y)
+        line2_res += '( xy %f %f)\n' % (-p.x, p.y)
+    line1_res += ") (layer F.Cu) (width 0.001)) \n"
+    line2_res += ") (layer F.Cu) (width 0.001)) \n"
+    return line1_res, line2_res
+
+
+def write_to_files(filename: str, res: dict, arcs: List[Arc], res_points: List[Point]):
     """
     function creates kicad_mod files (direct and inverted)
+    :param res_points: list of start points data
+    :param arcs: list of arcs data
     :param filename: name of file
     :param res: dict with coordinates
     :return:
@@ -315,9 +477,10 @@ def write_to_files(filename: str, res: dict):
     f2 = open(filename + "_inverted.kicad_mod", "w")
     f2.write("(module %s\n" % filename)
     [i, j] = get_indexes(res[list(res.keys())[0]])
+
     for rect in res.keys():
         points = res[rect]
-        if len(points) < 2 and abs(points[1][0] - points[0][0]) < 30:
+        if len(points) == 4 and abs((points[1][0] - points[0][0])*(points[0][1] - points[1][1])) < 200:
             s1 = "  (fp_poly (pts "
             s2 = "  (fp_poly (pts "
             for point in points:
@@ -325,6 +488,12 @@ def write_to_files(filename: str, res: dict):
                 s2 += ("(xy %.6f %.6f) " % (0-point[i], point[j]))
             f1.write(s1[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
             f2.write(s2[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
+
+    poly_points: List[Point] = get_points_for_arc(arcs, res_points, deg_delta)
+    if poly_points:
+        line1_res, line2_res = get_kicad_line_for_polyline(poly_points)
+        f1.write(line1_res)
+        f2.write(line2_res)
     f1.write(")")
     f1.close()
     f2.write(")")
@@ -335,13 +504,13 @@ def main(filename):
     try:
         create_first_json(filename)
     except FileNotFoundError:
-        print("File %s not found" % (filename))
+        print("File %s not found" % filename)
         return
     filename = filename.split('.')[0]
     create_second_json(filename)
 
     try:
-        res = get_coordinates(filename)
+        res, arc, points = get_coordinates(filename)
     except json.decoder.JSONDecodeError:
         print("Json failed")
         return
@@ -352,7 +521,7 @@ def main(filename):
     new_res = {}
     for key in new_keys:
         new_res[key] = res[key]
-    write_to_files(filename, new_res)
+    write_to_files(filename, new_res, arc, points)
     print("%s.kicad_mod created, %s_inverted.kicad_mod created" % (filename, filename))
 
 
