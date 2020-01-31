@@ -2,14 +2,13 @@ import re
 import json
 import sys
 from os import remove
-from  dataclasses import dataclass
+from dataclasses import dataclass
 from typing import List, Any, Dict, Tuple
 import math
 
-
 # doubled hssf elements (should be replaced with Element0..EleemntN to validate json file)
 doubled = {"MoveBackwards", "VariableProp", "AnsoftRangedIDServer", "Operation", "TolVt", "GeometryPart",
-           "PLSegment",'Edge', "DependencyObject", "PLPoint", "DependencyInformation", "GeometryPosition", "Range",
+           "PLSegment", 'Edge', "DependencyObject", "PLPoint", "DependencyInformation", "GeometryPosition", "Range",
            "Sweep", "Solution", "SimValue", "Soln", "TraceComponentDefinition", "TraceDef", "MainMapItem", "SubMapItem",
            "ListItem", "IDMapItem", "Graph2D"}
 
@@ -18,10 +17,12 @@ exclude_names = {"Port", "Top", "Bottom"}
 
 deg_delta = 0.1
 
+
 @dataclass
 class Point:
     x: float
     y: float
+
 
 @dataclass
 class Arc:
@@ -43,13 +44,18 @@ def prepare_json(text: str) -> str:
     :return: text corrected
     """
 
+    # rule0: remove files part
+    i = text.find(r"$end 'AnsoftProject'")
+    text = text[: i + len(r"$end 'AnsoftProject'")]
+    text += '\n'
+
     # rule1: remove tabulations
     text = re.sub(r"\t", "", text)
 
     # rule2: remove doubled quotes
     text = re.sub('\'\"|\"\'', r'"', text)
 
-    # rule3 ' -> "
+    # rule3 change quotes ' -> "
     text = re.sub(r"'", r'"', text)
 
     # rule4: $begin "Attribute" -> "Attribute":{
@@ -57,7 +63,7 @@ def prepare_json(text: str) -> str:
     text = templ.sub(r'"\1":{\n', text)
 
     # rule5: $end "Attribute" -> }
-    text = re.sub('\$end \"?[\w\s]*\"\n', "},\n", text)
+    text = re.sub(r'\$end \"?[\w\s]*\"\n', "},\n", text)
 
     # rule6 screens # symbol
     templ = re.compile(r'#([\w]+)')
@@ -66,13 +72,6 @@ def prepare_json(text: str) -> str:
     # rule7 function()) -> 'function<text>)' (if no spaces)
     templ = re.compile(r'(\w*)\(( *)\)\)')
     text = templ.sub(r'"\1<\2>")', text)
-
-    # rule 8 ": " -> ", "
-    text = re.sub("[^ ]: ", ", ", text)
-
-    # remove ProjectPreview part
-    #i = text.index(r'"AllReferencedFilesForProject":{')
-    #text = text[:i]
 
     return text
 
@@ -84,30 +83,46 @@ def data_correct(text: str) -> str:
     :return:
     """
 
-    # rule9: special rule for strings like Name='max(dB(S(1,1)))'
+    # rule8 '. ' -> "" (remove dor with space)
+    text = text.replace(". ", "")
+
+    # rule9 '[value: value]' -> 'value-value for Level strings'
+    if 'Level' in text:
+        templ = re.compile(r'\[(-?\d+\.?\d*): (-?\d+)]')
+        text = templ.sub(r'\1-\2', text)
+
+    # rule10 ": " -> ", "
+    text = re.sub("[^ ]: ", ", ", text)
+
+    # rule11 '(R=R1, G=G1, B=B1) - > ({R=R1}, {G=G1}, {B=B1})'
+    if 'Color' in text:
+        templ = re.compile(r'\(R=(\d+), G=(\d+), B=(\d+)\)')
+        text = templ.sub(r'({"R": \1}, {"G": \2}, {"B": \3})', text)
+
+    # rule12 '[, ' -> [
+    text = text.replace(r'[, ', '[')
+
+    # rule13: special rule for strings like Name='max(dB(S(1,1)))'
     templ = re.compile(r'\(?(d?B?)\(?[SZ]\(1[,;]1\)\)?\)?')
     text = templ.sub(r'<\1<S<1.1>>>', text)
 
-    # rule10: special rule for db(S(1, 1))
+    # rule14: special rule for db(S(1, 1))
     templ = re.compile(r'dB\(([^\)]*)\)')
     text = templ.sub(r'db<\1>', text)
 
-    # rule11: special rule for theta-rho-phi(0)
+    # rule15: special rule for theta-rho-phi(0)
     if "theta-rho-phi(0)" in text:
         text = text.replace("(0)", "<0>")
 
-    # rule12: fix SimVAlueID parameter
+    # rule16: fix SimVAlueID parameter
     if "SimValueID" in text:
         text = text.replace("SimValueID=", "\"SimValueID\", ")
 
-    # rule13 escape characters for quotes in strings with SweptVAlue parameter
-    #if "SweptValues" in text:
-    #    text = text.replace(r'"', r'\"')
-
-    # rule14 handle special words $begin_data and $end_data
+    # rule17 handle special words $begin_data and $end_data
     templ = re.compile(r"\$begin_cdata\$(.)*?\$end_cdata\$")
     text = templ.sub(r'"start_data \1end_data"', text)
 
+    # rule18 for Height()
     if 'Height' in text and 'if' in text:
         text = text.replace('(', '<')
         text = text.replace(')', '>')
@@ -165,18 +180,17 @@ def string_handler(text: str) -> str:
 
     text = data_correct(text)
 
-    # rule15: comma in the middle of text (without space) becomes ;
+    # rule19: comma in the middle of text (without space) becomes ;
     templ = re.compile(r',([^ ])')
     text = templ.sub(r';\1', text)
 
-    # rule16: attribute=value(data) -> 'attribute':'value(data)'
+    # rule20: attribute=value(data) -> 'attribute':'value(data)'
     templ = re.compile(r'"?(\w+)"?="?(\w+)\((\w+)\)"?')
     temp = templ.sub(r'"\1":"\2(\3)",', text)
     if temp != text:
         return temp
 
-
-    # rule17: (id=value, id1 = value1) -> ("id"->"value", "id1"->"value1")
+    # rule21: (id=value, id1 = value1) -> ("id"->"value", "id1"->"value1")
     templ = re.compile(r'([\w ]+)\(([^\)]*)\)')
     res = templ.findall(text)
     for r in res:
@@ -184,7 +198,7 @@ def string_handler(text: str) -> str:
         for data in r:
             text = templ2.sub(r'"\1":"\2"', text)
 
-    # rule18 blabala attribute(text)  -> blabbla {"attribute":{"text"}}
+    # rule22 blabala attribute(text)  -> blabbla {"attribute":{"text"}}
     #      attribute(text)  -> "attribute":{"text"}
     templ = re.compile(r'"?([\w]+)"?\(([\w "-]+):([^\)]+)\)')
     res = templ.search(text)
@@ -194,27 +208,27 @@ def string_handler(text: str) -> str:
         else:
             text = templ.sub(r'{"\1":{\2:\3}}', text)
 
-    # rule 19: Attribute="value" -> "Attribute":"value",
+    # rule 23: Attribute="value" -> "Attribute":"value",
     #          Attribute=value -> "Attribute":value,
     #          "Attribute"=value -> "Attribute":value,
     #          Attribute = value, -> "Attribute":value
     templ = re.compile(r'"?([\w +-]*)"? ?= ?("?[^,]*"?),? ?')
     text = templ.sub(r'"\1":\2,', text)
 
-    # rule 20: Attribute[value] -> "Attribute":"[value]" (without " in [])
+    # rule 24: Attribute[value] -> "Attribute":"[value]" (without " in [])
     templ = re.compile(r'"?([\w ]+)"?(\[[^\]\"]*\])')
     text = templ.sub(r'"\1":"\2",', text)
 
-    # rule 21: Attribute[...] -> "Attribute":[...],
+    # rule 25: Attribute[...] -> "Attribute":[...],
     templ = re.compile(r'"?([\w ]+)"?\[([^\]]*)\]')
     text = templ.sub(r'"\1":[\2],', text)
 
-    # rule 22: Attribute(values) -> "Attribute":[values],
+    # rule 26: Attribute(values) -> "Attribute":[values],
     #        "Attribute"(values) -> "Attribute":[values],
     templ = re.compile(r'"?([\w ]+)"?\((.*)\)')
     text = templ.sub(r'"\1":[\2],', text)
 
-    # rule23: remove extra commas
+    # rule27: remove extra commas
     text = re.sub(",,", ",", text)
 
     return text
@@ -259,13 +273,14 @@ def create_second_json(filename: str):
     :param filename: name of json file
     :return:
     """
-    g = open(filename + '.json', encoding='utf-8', errors = 'ignore')
+    g = open(filename + '.json', encoding='utf-8', errors='ignore')
     text = g.read()
     text = replace_with_count(text)
     text = re.sub(',\n*}', '}', text)
     g.close()
     g = open(filename + '.json', "w", encoding='utf-8')
     g.write(text)
+    g.close()
 
 
 def get_variables(data: Dict[str, Any]):
@@ -274,7 +289,7 @@ def get_variables(data: Dict[str, Any]):
     :param data: data
     :return: dict with variables
     """
-    res: Dict [str, Any] = dict()
+    res: Dict[str, Any] = dict()
     for key in data:
         res[data[key][0]] = data[key][3].replace("mm", "")
         try:
@@ -282,6 +297,7 @@ def get_variables(data: Dict[str, Any]):
         except ValueError:
             pass
     return res
+
 
 def create_coord_dict(data: Dict[str, Any], res: Dict[int, List[str]]) -> Dict[int, List[str]]:
     """
@@ -305,6 +321,7 @@ def create_coord_dict(data: Dict[str, Any], res: Dict[int, List[str]]) -> Dict[i
                     res[int(key[12:])] = point_array
     return res
 
+
 def add_parameters_value(parameters: Dict[str, Any], points: List[Point]):
     """
     custom function for parametrical parameters, change it for every antenna
@@ -312,10 +329,11 @@ def add_parameters_value(parameters: Dict[str, Any], points: List[Point]):
     :param points: list of points
     :return:
     """
-    angle_rad = float(parameters['Angle'].replace("deg", ""))/180*math.pi
+    angle_rad = float(parameters['Angle'].replace("deg", "")) / 180 * math.pi
     points[0].x = float(parameters['X02'][:4]) + parameters['W2']
     points[0].y = parameters['Y02'] - 0.2
-    points[8].x = parameters['Y20'] - (parameters['Y22'] * math.cos(angle_rad) - parameters['X22'] * math.sin(angle_rad))
+    points[8].x = parameters['Y20'] - (parameters['Y22'] * math.cos(angle_rad) -
+                                       parameters['X22'] * math.sin(angle_rad))
     points[8].y = parameters['X20'] - parameters['X22'] * math.cos(angle_rad) - parameters['Y22'] * math.sin(angle_rad)
     points[15].x = float(parameters['X02'][:4]) + parameters['W2']
     points[15].y = parameters['Y02'] - 0.2
@@ -340,14 +358,15 @@ def get_arc_data(data: Dict[str, Any], parameters: Dict[str, Any]) -> Tuple[List
                         if arcs[segment]['SegmentType'] == 'AngularArc':
                             try:
                                 res_arcs.append(Arc(startindex=arcs[segment]['StartIndex'],
-                                               number_of_point=arcs[segment]['NoOfPoints'],
-                                               numberofsegments=int(arcs[segment]['NoOfSegments']),
-                                               angle=float(arcs[segment]['ArcAngle'].replace("deg", "")),
-                                               center_x=float(arcs[segment]['ArcCenterX'].replace('mm', "")),
-                                               center_y=float(arcs[segment]['ArcCenterY'].replace('mm', "")),
-                                               type="arc"))
+                                                    number_of_point=arcs[segment]['NoOfPoints'],
+                                                    numberofsegments=int(arcs[segment]['NoOfSegments']),
+                                                    angle=float(arcs[segment]['ArcAngle'].replace("deg", "")),
+                                                    center_x=float(arcs[segment]['ArcCenterX'].replace('mm', "")),
+                                                    center_y=float(arcs[segment]['ArcCenterY'].replace('mm', "")),
+                                                    type="arc"))
                             except ValueError:
-                                angle = -float(parameters['Angle'].replace("deg", "")) if "-" in arcs[segment]['ArcAngle'] \
+                                angle = -float(parameters['Angle'].replace("deg", "")) if "-" in arcs[segment][
+                                    'ArcAngle'] \
                                     else float(parameters['Angle'].replace("deg", ""))
                                 res_arcs.append(Arc(startindex=arcs[segment]['StartIndex'],
                                                     number_of_point=arcs[segment]['NoOfPoints'],
@@ -358,8 +377,8 @@ def get_arc_data(data: Dict[str, Any], parameters: Dict[str, Any]) -> Tuple[List
                                                     type="arc"))
                         if arcs[segment]['SegmentType'] == 'Line':
                             res_arcs.append(Arc(type="line",
-                                           startindex=arcs[segment]['StartIndex'],
-                                           number_of_point=arcs[segment]['NoOfPoints']))
+                                                startindex=arcs[segment]['StartIndex'],
+                                                number_of_point=arcs[segment]['NoOfPoints']))
                     points = operations[key]['PolylineParameters']['PolylinePoints']
                     for point in points.keys():
                         try:
@@ -391,7 +410,6 @@ def get_coordinates(filename: str):
     return res, res_arcs, res_points
 
 
-
 def get_indexes(coords: list) -> (int, int):
     """
     get indexes of coords elements
@@ -400,8 +418,8 @@ def get_indexes(coords: list) -> (int, int):
     :return: indexes of coord elements (1, 2) here
     """
     indexes = []
-    arr  = [len(set(x)) for x in [[coords[i][j] for i in range (0, 4)] for j in range (0, 4)]]
-    for i in range(0,4):
+    arr = [len(set(x)) for x in [[coords[i][j] for i in range(0, 4)] for j in range(0, 4)]]
+    for i in range(0, 4):
         if arr[i] > 1:
             indexes.append(i)
     return indexes
@@ -423,9 +441,9 @@ def get_points_for_arc(arcs: List[Arc], res_points: List[Point], delta: float) -
             y: float = start_point.y
             ang: float = arc.angle
             x_c: float = arc.center_x
-            y_c: float= arc.center_y
-            r: float = math.sqrt((x-x_c)*(x-x_c) + (y-y_c)*(y-y_c))
-            start_angle: float = math.atan2(y-y_c, x-x_c)/math.pi*180
+            y_c: float = arc.center_y
+            r: float = math.sqrt((x - x_c) * (x - x_c) + (y - y_c) * (y - y_c))
+            start_angle: float = math.atan2(y - y_c, x - x_c) / math.pi * 180
             stop_angle: float = start_angle + ang
             if ang > 0:
                 da: float = delta
@@ -435,8 +453,8 @@ def get_points_for_arc(arcs: List[Arc], res_points: List[Point], delta: float) -
                 cond = lambda a: a > stop_angle
             a = start_angle
             while cond(a):
-                x = x_c + r * math.cos(a/180*math.pi)
-                y = y_c+ r * math.sin(a/180*math.pi)
+                x = x_c + r * math.cos(a / 180 * math.pi)
+                y = y_c + r * math.sin(a / 180 * math.pi)
                 poly_points.append(Point(x=x, y=y))
                 a += da
         if arc.type == "line":
@@ -444,7 +462,7 @@ def get_points_for_arc(arcs: List[Arc], res_points: List[Point], delta: float) -
             end_point = res_points[arc.startindex + 1]
             poly_points.append(Point(x=start_point.x, y=start_point.y))
             poly_points.append(Point(x=end_point.x, y=end_point.y))
-    return  poly_points
+    return poly_points
 
 
 def get_kicad_line_for_polyline(poly_points: List[Point]) -> Tuple[str, str]:
@@ -480,12 +498,12 @@ def write_to_files(filename: str, res: dict, arcs: List[Arc], res_points: List[P
 
     for rect in res.keys():
         points = res[rect]
-        if len(points) == 4 and abs((points[1][0] - points[0][0])*(points[0][1] - points[1][1])) < 200:
+        if len(points) == 4 and abs((points[1][0] - points[0][0]) * (points[0][1] - points[1][1])) < 200:
             s1 = "  (fp_poly (pts "
             s2 = "  (fp_poly (pts "
             for point in points:
                 s1 += ("(xy %.6f %.6f) " % (point[i], point[j]))
-                s2 += ("(xy %.6f %.6f) " % (0-point[i], point[j]))
+                s2 += ("(xy %.6f %.6f) " % (0 - point[i], point[j]))
             f1.write(s1[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
             f2.write(s2[:-1] + ") (layer F.Cu) (width 0.001) )\n" + "   ")
 
@@ -500,12 +518,12 @@ def write_to_files(filename: str, res: dict, arcs: List[Arc], res_points: List[P
     f2.close()
 
 
-def main(filename):
+def main(filename: str) -> bool:
     try:
         create_first_json(filename)
     except FileNotFoundError:
         print("File %s not found" % filename)
-        return
+        return False
     filename = filename.split('.')[0]
     create_second_json(filename)
 
@@ -513,9 +531,9 @@ def main(filename):
         res, arc, points = get_coordinates(filename)
     except json.decoder.JSONDecodeError:
         print("Json failed")
-        return
+        return False
 
-    # remove(filename + '.json')
+    remove(filename + '.json')
 
     new_keys = sorted(res.keys())
     new_res = {}
@@ -523,6 +541,7 @@ def main(filename):
         new_res[key] = res[key]
     write_to_files(filename, new_res, arc, points)
     print("%s.kicad_mod created, %s_inverted.kicad_mod created" % (filename, filename))
+    return True
 
 
 if __name__ == '__main__':
