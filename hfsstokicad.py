@@ -88,7 +88,7 @@ def data_correct(text: str) -> str:
 
     # rule9 '[value: value]' -> 'value-value for Level strings'
     if 'Level' in text:
-        templ = re.compile(r'\[(-?\d+\.?\d*): (-?\d+)]')
+        templ = re.compile(r'\[(-?\d+\.?\d*): (-?\d+\.?\d*)]')
         text = templ.sub(r'\1-\2', text)
 
     # rule10 ": " -> ", "
@@ -107,8 +107,8 @@ def data_correct(text: str) -> str:
     text = templ.sub(r'<\1<S<1.1>>>', text)
 
     # rule14: special rule for db(S(1, 1))
-    templ = re.compile(r'dB\(([^\)]*)\)')
-    text = templ.sub(r'db<\1>', text)
+    templ = re.compile(r'dB\(([^\)]*)\(([^\)]*)\)\)')
+    text = templ.sub(r'db<\1<\2>>', text)
 
     # rule15: special rule for theta-rho-phi(0)
     if "theta-rho-phi(0)" in text:
